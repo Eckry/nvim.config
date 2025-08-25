@@ -5,7 +5,8 @@ local servers = {
   "clangd",
   "ts_ls",
   "cssls",
-  "vtsls"
+  "vtsls",
+  "html"
 }
 
 local settings = {
