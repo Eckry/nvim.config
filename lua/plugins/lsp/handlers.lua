@@ -1,13 +1,13 @@
 local M = {}
--- TODO: backfill this to template
+
 M.setup = function()
   local config = {
     signs = {
       text = {
-        [vim.diagnostic.severity.ERROR] = '', -- or other icon of your choice here, this is just what my config has:
-        [vim.diagnostic.severity.WARN] = '',
-        [vim.diagnostic.severity.INFO] = '',
-        [vim.diagnostic.severity.HINT] = '󰌵',
+        [vim.diagnostic.severity.ERROR] = '',
+        [vim.diagnostic.severity.WARN]  = '',
+        [vim.diagnostic.severity.INFO]  = '',
+        [vim.diagnostic.severity.HINT]  = '󰌵',
       },
     },
     virtual_text = true,
@@ -33,51 +33,92 @@ M.setup = function()
     border = "rounded",
   })
 end
-local function lsp_highlight_document(client)
-  -- Set autocommands conditional on server_capabilities
-  if client.server_capabilities.documentHighlight then
-    vim.api.nvim_exec(
-      [[
-      augroup lsp_document_highlight
-        autocmd! * <buffer>
-        autocmd CursorHold <buffer> lua vim.lsp.buf.document_highlight()
-        autocmd CursorMoved <buffer> lua vim.lsp.buf.clear_references()
-      augroup END
-    ]],
-      false
-    )
+
+local function lsp_highlight_document(client, bufnr)
+  if client.server_capabilities and client.server_capabilities.documentHighlightProvider then
+    local group = vim.api.nvim_create_augroup("lsp_document_highlight_" .. bufnr, { clear = true })
+    vim.api.nvim_create_autocmd("CursorHold", {
+      group = group,
+      buffer = bufnr,
+      callback = function() vim.lsp.buf.document_highlight() end,
+    })
+    vim.api.nvim_create_autocmd("CursorMoved", {
+      group = group,
+      buffer = bufnr,
+      callback = function() vim.lsp.buf.clear_references() end,
+    })
   end
 end
 
 local function lsp_keymaps(bufnr)
   local opts = { noremap = true, silent = true }
-  vim.api.nvim_buf_set_keymap(bufnr, "n", "gD", "<cmd>lua vim.lsp.buf.declaration()<CR>", opts)
-  vim.api.nvim_buf_set_keymap(bufnr, "n", "gd", "<cmd>lua vim.lsp.buf.definition()<CR>", opts)
-  vim.api.nvim_buf_set_keymap(bufnr, "n", "K", "<cmd>lua vim.lsp.buf.hover()<CR>", opts)
-  vim.api.nvim_buf_set_keymap(bufnr, "n", "gi", "<cmd>lua vim.lsp.buf.implementation()<CR>", opts)
-  vim.api.nvim_buf_set_keymap(bufnr, "n", "<C-k>", "<cmd>lua vim.lsp.buf.signature_help()<CR>", opts)
-  -- vim.api.nvim_buf_set_keymap(bufnr, "n", "<leader>rn", "<cmd>lua vim.lsp.buf.rename()<CR>", opts)
-  vim.api.nvim_buf_set_keymap(bufnr, "n", "gr", "<cmd>lua vim.lsp.buf.references()<CR>", opts)
-  -- vim.api.nvim_buf_set_keymap(bufnr, "n", "<leader>ca", "<cmd>lua vim.lsp.buf.code_action()<CR>", opts)
-  -- vim.api.nvim_buf_set_keymap(bufnr, "n", "<leader>f", "<cmd>lua vim.diagnostic.open_float()<CR>", opts)
-  vim.api.nvim_buf_set_keymap(bufnr, "n", "[d", '<cmd>lua vim.diagnostic.goto_prev({ border = "rounded" })<CR>', opts)
-  vim.api.nvim_buf_set_keymap(bufnr, "n", "]d", '<cmd>lua vim.diagnostic.goto_next({ border = "rounded" })<CR>', opts)
-  vim.api.nvim_buf_set_keymap(bufnr, "n", "<leader>q", "<cmd>lua vim.diagnostic.setloclist()<CR>", opts)
-  vim.api.nvim_create_user_command("Format", function()
-    vim.lsp.buf.format({ async = true })
-  end, {})
+  local function bufmap(mode, lhs, rhs)
+    vim.api.nvim_buf_set_keymap(bufnr, mode, lhs, rhs, opts)
+  end
+
+  bufmap("n", "gD", "<cmd>lua vim.lsp.buf.declaration()<CR>")
+  bufmap("n", "gd", "<cmd>lua vim.lsp.buf.definition()<CR>")
+  bufmap("n", "K", "<cmd>lua vim.lsp.buf.hover()<CR>")
+  bufmap("n", "gi", "<cmd>lua vim.lsp.buf.implementation()<CR>")
+  bufmap("n", "<C-k>", "<cmd>lua vim.lsp.buf.signature_help()<CR>")
+  bufmap("n", "gr", "<cmd>lua vim.lsp.buf.references()<CR>")
+  bufmap("n", "[d", '<cmd>lua vim.diagnostic.goto_prev({ border = "rounded" })<CR>')
+  bufmap("n", "]d", '<cmd>lua vim.diagnostic.goto_next({ border = "rounded" })<CR>')
+  bufmap("n", "<leader>q", "<cmd>lua vim.diagnostic.setloclist()<CR>")
 end
 
 M.on_attach = function(client, bufnr)
-  -- Format on save
+  -- apply keymaps and document highlight
+  lsp_keymaps(bufnr)
+  lsp_highlight_document(client, bufnr)
+
+  -- helper to check formatting capability
+  local function client_supports_format(c)
+    if not c then return false end
+    if c.supports_method then
+      return c.supports_method("textDocument/formatting") or c.supports_method("textDocument/rangeFormatting")
+    end
+    local caps = c.server_capabilities or c.resolved_capabilities
+    return caps and (caps.documentFormattingProvider or caps.documentRangeFormattingProvider)
+  end
+
+  -- If this client can't format, don't create format autocommands/commands for it
+  if not client_supports_format(client) then
+    return
+  end
+
+  -- create a buffer-local Format command that uses *this* client only
+  if vim.api.nvim_buf_create_user_command then
+    vim.api.nvim_buf_create_user_command(bufnr, "Format", function()
+      vim.lsp.buf.format({
+        bufnr = bufnr,
+        async = true,
+        filter = function(c) return c.id == client.id end,
+      })
+    end, { desc = "Format current buffer with attached LSP client" })
+  else
+    -- fallback for older nvim (global command)
+    vim.api.nvim_create_user_command("Format", function()
+      vim.lsp.buf.format({
+        bufnr = bufnr,
+        async = true,
+        filter = function(c) return c.id == client.id end,
+      })
+    end, {})
+  end
+
+  -- create a unique augroup for this buffer so autocmds don't conflict
+  local augroup = vim.api.nvim_create_augroup("LspFormatting_" .. bufnr, { clear = true })
+
+  -- Format on save using *this* client only
   vim.api.nvim_create_autocmd("BufWritePre", {
-    buffer = bufnr,
+    group = augroup,
     callback = function()
-      vim.lsp.buf.format({ async = false })
+      vim.lsp.buf.format({
+        async = false,
+      })
     end,
   })
-  lsp_keymaps(bufnr)
-  lsp_highlight_document(client)
 end
 
 local status_ok, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
