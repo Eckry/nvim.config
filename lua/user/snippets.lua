@@ -24,7 +24,7 @@ ls.add_snippets('all', {
     "}",
     "",
     "int main() {",
-    "  optimize()",
+    "  optimize();",
     "  int T;",
     "  cin >> T;",
     "  while(T--) solve();",
